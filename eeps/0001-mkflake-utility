@@ -1,0 +1,92 @@
+---
+EEP: TBD
+Title: Add `mkFlake` Utility to Ekapkgs Repositories
+Author: jonringer
+Status: Draft
+Type: Standards Track
+Topic: Packaging
+Created: 2025-05-25
+---
+
+# Motivation
+
+The output structure of flakes is quite unintuitive for most people. At best,
+this creates a lot of boiler plate to be added to each project if you use utilities
+like `flake-utils` or `flake-parts`. At worse, you are hardcoding attr paths with
+embedded system types everywhere.
+
+Since Ekapkgs embraces composition through overlays, in particular, abstractions
+such as pkgsModules should enable arbitrary composition of package scopes easy.
+For flakes, we can expose a `mkFlake` facade which should allow for people to
+communicate their overlays and then they can provide system-agnostic projections
+of the packages they desire.
+
+# Detailed implementation
+
+```nix
+# For use with Ekapkgs repositories, prepend the pkgsModules from the repository
+mkFlakeWith = pkgsModules: args: let
+  allModules = pkgsModules ++ (args.pkgsModules or [ ]);
+  newArgs = args // { pkgsModules = allModules; };
+in mkFlake newArgs;
+
+mkFlake = {
+, pkgsModules ? [ ]
+, packages ? null
+, checks ? null
+, apps ? null
+, formatter ? null
+, devShells ? null
+, systems ? [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ]
+# Doesn't get mapped over each system
+, passthru
+...
+}: let
+  forEachSystem = lib.genAttrs systems
+  # This assumes that this is located in corepkgs' root directory
+  pkgsForSystem = system: import ./. { inherit system pkgsModules; };
+  # Evaluate legacyPackages as a fixed point to avoid re-instanting the package set each time
+  legacyPackages = forEachSystem pkgsForSystem
+  attrPredicate = name: value: value != null && lib.assertMsg (lib.isFunction value) "${name} must be a function"
+  applyAttrFn = name: attrFn: pkgs: lib.optionalAttrs (attrPredicate name attrFn) { ${name} = attrFn pkgs; }
+  applyAttrForSystem = name: attrFn: forEachSystem (system: applyAttrFn name attrFn legacyPackages.${system})
+in
+# TODO: make this not bad
+{ packages = applyAttrForSystem "packages" packages; }
+// { checks = applyAttrForSystem "checks" checks; }
+// { apps = applyAttrForSystem "apps" apps; }
+// { formatter = applyAttrForSystem "formatter" formatter; }
+// { devShells = applyAttrForSystem "devShells" devShells; }
+```
+
+
+
+# Example usage (optional)
+
+Sometimes it's best to show the impact of the changes, this can demonstrate
+the value-proposition of the proposal.
+
+# Prior art (optional)
+
+Examples of similar discussions or implementations
+
+# Unresolved questions (optional)
+
+Unanswered questions with proposal, this could be things like naming, implementations,
+scope, domain, second-order effects, etc.
+
+# Future work (optional)
+
+Items which should be done in the future. This could be: deprecation stories,
+work in downstream repos, documentation, etc.
+
+# Changes (optional)
+
+If a specification or api, what changed over time and why
+
+# Acknowledgements (optional)
+
+Gratitude towards other contributors who were helpful
+
+
+
